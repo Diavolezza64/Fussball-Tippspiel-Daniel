@@ -417,10 +417,100 @@ def debug_url(session, url):
     else:
         print('\n(Keine Gruppen-Links auf dieser Seite gefunden)')
 
+# ── Zusatzfragen-Antworten von SRF holen ─────────────────────────
+_ZUSATZ_FIELD_KEYS = ['wm', 'ch', 't_ch', 't_k', 'nullnull']
+
+def _parse_zusatz_from_html(html_text):
+    """Parst TextSelection-Antworten aus HTML. Gibt {key: answer} oder None zurück."""
+    from bs4 import BeautifulSoup as _BS
+    doc = _BS(html_text, 'html.parser')
+    bets = doc.find_all(attrs={'data-react-class': 'TextSelection'})
+    if not bets:
+        return None
+    answers = {}
+    for i, el in enumerate(bets):
+        bet = json.loads(el.get('data-react-props', '{}')).get('bet', {})
+        picks = bet.get('picks', [])
+        ans_map = {a['id']: a['name'] for a in bet.get('answers', [])}
+        answer = ans_map.get(picks[0]) if picks else None
+        key = _ZUSATZ_FIELD_KEYS[i] if i < len(_ZUSATZ_FIELD_KEYS) else f'q{i}'
+        answers[key] = answer
+    return answers if answers else None
+
+
+def fetch_zusatz_antworten(session, members):
+    """Holt Zusatzfragen-Antworten von SRF (Runde 40) für alle Member.
+    Gibt {id: {wm, ch, t_ch, t_k, nullnull}} zurück.
+
+    Sonderfall: wenn der eingeloggte User seine eigene Profilseite aufruft,
+    leitet SRF um (z.B. /mein-profil). In dem Fall wird /round/40 an die
+    Redirect-URL angehängt und ein zweiter Versuch gestartet.
+    """
+    print('→ Zusatzfragen-Antworten von SRF laden …')
+    result = {}
+    for m in members:
+        try:
+            url = f'{BASE_URL}/users/{m["id"]}/round/40'
+            resp = session.get(url, timeout=20, allow_redirects=True)
+
+            if resp.status_code != 200:
+                print(f'   ⚠️  {m["name"]}: HTTP {resp.status_code}')
+                continue
+
+            answers = _parse_zusatz_from_html(resp.text)
+
+            # Redirect erkannt → SRF zeigt eigenes Profil anders an (eingeloggter User).
+            # Lösung: ohne Session-Cookies holen (anonyme öffentliche Ansicht).
+            if answers is None and resp.url != url:
+                import requests as _req
+                anon_resp = _req.get(url, timeout=20, headers={
+                    'User-Agent': session.headers.get('User-Agent', _UA),
+                    'Accept-Language': 'de-CH,de;q=0.9,en;q=0.8',
+                })
+                if anon_resp.status_code == 200:
+                    answers = _parse_zusatz_from_html(anon_resp.text)
+
+            if answers is not None:
+                result[m['id']] = answers
+            else:
+                print(f'   ⚠️  {m["name"]}: Zusatzfragen nicht gefunden (URL: {resp.url})')
+
+        except Exception as e:
+            print(f'   ⚠️  {m["name"]}: {e}')
+        time.sleep(0.1)
+    print(f'   ✅ Zusatzfragen: {len(result)}/{len(members)} Antworten gespeichert')
+    return result
+
 # ── teilnehmer.json schreiben ────────────────────────────────────
-def save(members):
+def save(members, session=None):
     out = [{'id': m['id'], 'name': m['name'], 'rank': i}
            for i, m in enumerate(members, 1)]
+
+    # Zusatzspieler aus data/zusatz_spieler.csv ZUERST hinzufügen
+    # (damit ihre Zusatzfragen im nächsten Schritt mit geholt werden)
+    zusatz_path = os.path.join(os.path.dirname(CONFIG_DIR), 'data', 'zusatz_spieler.csv')
+    existing_ids = {m['id'] for m in out}
+    zusatz_count = 0
+    if os.path.exists(zusatz_path):
+        import csv as _csv
+        with open(zusatz_path, encoding='utf-8') as f:
+            for row in _csv.DictReader(f):
+                eid   = row.get('id',   '').strip()
+                ename = row.get('name', '').strip()
+                if eid and ename and eid not in existing_ids:
+                    out.append({'id': eid, 'name': ename, 'rank': len(out) + 1})
+                    existing_ids.add(eid)
+                    zusatz_count += 1
+        if zusatz_count:
+            print(f'   + {zusatz_count} Zusatzspieler aus data/zusatz_spieler.csv hinzugefügt')
+
+    # Zusatzfragen-Antworten von SRF holen – jetzt für ALLE (inkl. Zusatzspieler)
+    if session:
+        zusatz_by_id = fetch_zusatz_antworten(session, out)
+        for entry in out:
+            if entry['id'] in zusatz_by_id:
+                entry['zusatz'] = zusatz_by_id[entry['id']]
+
     with open(OUT_FILE, 'w', encoding='utf-8') as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print(f'✅  {len(out)} Teilnehmer → config/teilnehmer.json')
@@ -476,7 +566,7 @@ def main():
     for m in members_list:
         print(f'  {m["name"]:<32} id: {m["id"]}')
 
-    save(members_list)
+    save(members_list, session=session)
 
 if __name__ == '__main__':
     main()

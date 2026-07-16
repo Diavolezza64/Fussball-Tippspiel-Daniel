@@ -16,8 +16,6 @@ UPDATE_SRC="$DIR/config/update_source.txt"
 if [ -f "$UPDATE_SRC" ]; then
     BASE=$(tr -d '[:space:]' < "$UPDATE_SRC")
     if [[ "$BASE" != https://* ]]; then
-        echo "   (update_source.txt ungültig – setze Standard-URL)"
-        echo "$FALLBACK_BASE" > "$UPDATE_SRC"
         BASE="$FALLBACK_BASE"
     fi
 else
@@ -25,7 +23,6 @@ else
 fi
 
 echo "→ Code-Update vom Master …"
-# Alle Tools ausser wm_auto.py (bleibt satellite-spezifisch)
 TOOLS="wm_chart.py gen_rangliste.py debug_zusatz.py fetch_em_archiv.py fetch_wm_archiv.py wm2026_squads.py"
 UPDATED=0
 for f in $TOOLS; do
@@ -36,6 +33,13 @@ for f in $TOOLS; do
         rm -f "$DIR/tools/$f.tmp"
     fi
 done
+# config/find_gruppe.py (Zusatzfragen-Automatismus)
+if curl -sf --max-time 15 "$BASE/config/find_gruppe.py" -o "$DIR/config/find_gruppe.py.tmp" 2>/dev/null; then
+    mv "$DIR/config/find_gruppe.py.tmp" "$DIR/config/find_gruppe.py"
+    UPDATED=$((UPDATED + 1))
+else
+    rm -f "$DIR/config/find_gruppe.py.tmp"
+fi
 if curl -sf --max-time 30 "$BASE/web/WM_Rangverlauf.html" -o "$DIR/web/WM_Rangverlauf.html.tmp" 2>/dev/null; then
     mv "$DIR/web/WM_Rangverlauf.html.tmp" "$DIR/web/WM_Rangverlauf.html"
     UPDATED=$((UPDATED + 1))
