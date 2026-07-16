@@ -1017,8 +1017,10 @@ def update_index_html():
     print(f'   ✅ index.html: "{TURNIER["name"]}" zur Turnierauswahl hinzugefügt')
 
 # ── GitHub Pages Upload ───────────────────────────────────────
-GITHUB_TOKEN = ""   # Token nicht im Code speichern – wird via GITHUB_TOKEN Umgebungsvariable gesetzt
-GITHUB_REPO  = "Diavolezza64/Fussball-Tippspiel-Beat"
+# Token aus config/github_token.txt lesen
+_token_file = os.path.join(CONFIG_DIR, 'github_token.txt')
+GITHUB_TOKEN = open(_token_file, encoding='utf-8').read().strip() if os.path.exists(_token_file) else ""
+GITHUB_REPO  = "Diavolezza64/Fussball-Tippspiel-Daniel"
 
 def upload_to_github():
     """Lädt WM_Rangverlauf.html als index.html auf GitHub hoch (erstellt oder aktualisiert)."""

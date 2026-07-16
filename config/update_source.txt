@@ -1,4 +1,1 @@
-cd ~/Library/Mobile\ Documents/com~apple~CloudDocs/2\ Freizeit/Fussball\ Tippspiel\ Beat
-git add .
-git commit -m "Auto-Update für andere Tippspiele"
-git push
+https://raw.githubusercontent.com/Diavolezza64/Fussball-Tippspiel-Beat/main

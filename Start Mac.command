@@ -1,10 +1,6 @@
 #!/bin/bash
 # ──────────────────────────────────────────────────────────────
 # Fussball Tippspiel – Daten aktualisieren (Mac)
-# Doppelklick im Finder startet dieses Script im Terminal.
-#
-# Einmalig ausführbar machen (einmal im Terminal eingeben):
-#   chmod +x "Start Mac.command"
 # ──────────────────────────────────────────────────────────────
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -14,7 +10,52 @@ echo "🏆 Fussball Tippspiel – Daten werden aktualisiert …"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Python 3 suchen
+# Auto-Update: neueste Code-Version vom Master-Repo laden
+FALLBACK_BASE="https://raw.githubusercontent.com/Diavolezza64/Fussball-Tippspiel-Beat/main"
+UPDATE_SRC="$DIR/config/update_source.txt"
+if [ -f "$UPDATE_SRC" ]; then
+    BASE=$(tr -d '[:space:]' < "$UPDATE_SRC")
+    if [[ "$BASE" != https://* ]]; then
+        echo "   (update_source.txt ungültig – setze Standard-URL)"
+        echo "$FALLBACK_BASE" > "$UPDATE_SRC"
+        BASE="$FALLBACK_BASE"
+    fi
+else
+    BASE="$FALLBACK_BASE"
+fi
+
+echo "→ Code-Update vom Master …"
+# Alle Tools ausser wm_auto.py (bleibt satellite-spezifisch)
+TOOLS="wm_chart.py gen_rangliste.py debug_zusatz.py fetch_em_archiv.py fetch_wm_archiv.py wm2026_squads.py"
+UPDATED=0
+for f in $TOOLS; do
+    if curl -sf --max-time 15 "$BASE/tools/$f" -o "$DIR/tools/$f.tmp" 2>/dev/null; then
+        mv "$DIR/tools/$f.tmp" "$DIR/tools/$f"
+        UPDATED=$((UPDATED + 1))
+    else
+        rm -f "$DIR/tools/$f.tmp"
+    fi
+done
+if curl -sf --max-time 30 "$BASE/web/WM_Rangverlauf.html" -o "$DIR/web/WM_Rangverlauf.html.tmp" 2>/dev/null; then
+    mv "$DIR/web/WM_Rangverlauf.html.tmp" "$DIR/web/WM_Rangverlauf.html"
+    UPDATED=$((UPDATED + 1))
+else
+    rm -f "$DIR/web/WM_Rangverlauf.html.tmp"
+fi
+if curl -sf --max-time 15 "$BASE/web/index.html" -o "$DIR/web/index.html.tmp" 2>/dev/null; then
+    mv "$DIR/web/index.html.tmp" "$DIR/web/index.html"
+    UPDATED=$((UPDATED + 1))
+else
+    rm -f "$DIR/web/index.html.tmp"
+fi
+if [ $UPDATED -gt 0 ]; then
+    echo "   ✓ $UPDATED Dateien aktualisiert"
+else
+    echo "   (offline oder keine Änderungen)"
+fi
+echo ""
+
+# Python 3 suchen und wm_auto.py starten
 if command -v python3 &>/dev/null; then
     python3 tools/wm_auto.py
 elif command -v python &>/dev/null; then
@@ -25,23 +66,9 @@ else
 fi
 
 echo ""
-
-# GitHub: Änderungen automatisch pushen (nur wenn Git eingerichtet ist)
-if [ -d ".git" ] && command -v git &>/dev/null; then
-    git add . &>/dev/null
-    if ! git diff --cached --quiet; then
-        DATUM=$(date '+%Y-%m-%d %H:%M')
-        git commit -m "Auto-Update $DATUM" &>/dev/null && \
-        git push &>/dev/null && \
-        echo "✅ GitHub aktualisiert" || \
-        echo "⚠️  GitHub-Push fehlgeschlagen (kein Internet?)"
-    fi
-fi
-
-echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Dashboard im Browser öffnen
+# Dashboard öffnen
 if [ -f "web/index.html" ]; then
     open "web/index.html"
 fi
