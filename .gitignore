@@ -24,3 +24,4 @@ config/teilnehmer.json
 
 # Setup-Script (nur einmalig nötig)
 setup_github.command
+config/github_token.txt
