@@ -23,7 +23,7 @@ else
 fi
 
 echo "→ Code-Update vom Master …"
-TOOLS="wm_chart.py gen_rangliste.py debug_zusatz.py fetch_em_archiv.py fetch_wm_archiv.py wm2026_squads.py"
+TOOLS="wm_auto.py wm_chart.py gen_rangliste.py debug_zusatz.py fetch_em_archiv.py fetch_wm_archiv.py wm2026_squads.py"
 UPDATED=0
 for f in $TOOLS; do
     if curl -sf --max-time 15 "$BASE/tools/$f" -o "$DIR/tools/$f.tmp" 2>/dev/null; then

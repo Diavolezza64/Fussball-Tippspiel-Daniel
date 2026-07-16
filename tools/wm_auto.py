@@ -21,6 +21,7 @@ from datetime import datetime
 # wm_auto.py liegt in tools/ → Stammverzeichnis = eine Ebene höher
 TOOLS_DIR  = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_DIR = os.path.dirname(TOOLS_DIR)          # Projekt-Root
+BASE_DIR   = SCRIPT_DIR
 WEB_DIR    = os.path.join(SCRIPT_DIR, 'web')     # HTML-Dateien
 CONFIG_DIR = os.path.join(SCRIPT_DIR, 'config')
 DATA_DIR   = os.path.join(SCRIPT_DIR, 'data')
@@ -83,23 +84,56 @@ def cleanup_old_files():
 
 def _auto_update_members():
     """
-    Prüft ob gruppen.txt neuer ist als teilnehmer.json.
-    Falls ja → find_gruppe.py automatisch ausführen, um Mitglieder neu zu laden.
+    Prüft ob gruppen.txt existiert und ob sie neuer ist als teilnehmer.json.
+    Falls gruppen.txt fehlt → Ersteinrichtung anleiten.
+    Falls gruppen.txt neuer → find_gruppe.py automatisch ausführen.
     """
     gruppen_txt   = os.path.join(CONFIG_DIR, 'gruppen.txt')
+    example_txt   = os.path.join(CONFIG_DIR, 'gruppen.txt.example')
     teilnehmer    = os.path.join(CONFIG_DIR, 'teilnehmer.json')
     find_script   = os.path.join(CONFIG_DIR, 'find_gruppe.py')
 
-    if not os.path.exists(gruppen_txt) or not os.path.exists(find_script):
-        return  # nichts zu tun
+    # Ersteinrichtung: gruppen.txt fehlt
+    if not os.path.exists(gruppen_txt):
+        print()
+        print('╔══════════════════════════════════════════════════════════╗')
+        print('║  ERSTEINRICHTUNG – Gruppen-ID fehlt                     ║')
+        print('╠══════════════════════════════════════════════════════════╣')
+        print('║  1. Datei öffnen:  config/gruppen.txt.example           ║')
+        print('║  2. Kopieren als:  config/gruppen.txt                   ║')
+        print('║  3. Deine Gruppen-ID eintragen (Zahl aus der SRF-URL)   ║')
+        print('║  4. Dieses Script erneut starten                        ║')
+        print('╚══════════════════════════════════════════════════════════╝')
+        print()
+        sys.exit(0)
+
+    # Gruppen-ID prüfen (darf nicht Platzhalter sein)
+    with open(gruppen_txt, 'r', encoding='utf-8') as f:
+        ids = [l.strip() for l in f if l.strip() and not l.startswith('#')]
+    if not ids or ids[0] == 'XXXXX':
+        print()
+        print('╔══════════════════════════════════════════════════════════╗')
+        print('║  EINRICHTUNG – Bitte Gruppen-ID eintragen               ║')
+        print('║  Datei:  config/gruppen.txt                             ║')
+        print('║  Inhalt: Deine Gruppen-ID (Zahl aus der SRF-URL)        ║')
+        print('╚══════════════════════════════════════════════════════════╝')
+        print()
+        sys.exit(0)
+
+    if not os.path.exists(find_script):
+        return
 
     gruppen_mtime    = os.path.getmtime(gruppen_txt)
+    find_mtime       = os.path.getmtime(find_script) if os.path.exists(find_script) else 0
     teilnehmer_mtime = os.path.getmtime(teilnehmer) if os.path.exists(teilnehmer) else 0
 
-    if gruppen_mtime <= teilnehmer_mtime:
+    if gruppen_mtime <= teilnehmer_mtime and find_mtime <= teilnehmer_mtime:
         return  # teilnehmer.json ist aktuell
 
-    print('⚠️  gruppen.txt wurde geändert → Mitglieder werden neu geladen …')
+    if find_mtime > teilnehmer_mtime:
+        print('⚠️  find_gruppe.py wurde aktualisiert → Mitglieder + Zusatzfragen werden neu geladen …')
+    else:
+        print('⚠️  gruppen.txt wurde geändert → Mitglieder werden neu geladen …')
     result = subprocess.run(
         [sys.executable, find_script],
         capture_output=False
@@ -109,19 +143,72 @@ def _auto_update_members():
         sys.exit(1)
     print('✅  Mitglieder aktualisiert.')
 
+ZUSATZ_ANTWORTEN = {}  # {name: {wm, ch, t_ch, t_k, nullnull}} – aus teilnehmer.json
+
+def _parse_ausschluss():
+    """Liest config/ausschluss.txt. Unterstützt 'ID;Name' und 'Name'-Format.
+    Gibt (excluded_ids: set, excluded_names: set) zurück."""
+    ausschluss_path = os.path.join(CONFIG_DIR, 'ausschluss.txt')
+    excl_ids, excl_names = set(), set()
+    if os.path.exists(ausschluss_path):
+        with open(ausschluss_path, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if ';' in line:
+                    parts = line.split(';', 1)
+                    excl_ids.add(parts[0].strip())
+                    excl_names.add(parts[1].strip().lower())
+                else:
+                    excl_names.add(line.lower())
+    return excl_ids, excl_names
+
 def _load_members():
-    """Lädt Teilnehmerliste aus config/teilnehmer.json (nicht hardcodiert)."""
-    _auto_update_members()   # gruppen.txt-Änderung erkennen und ggf. neu laden
+    """Lädt Teilnehmerliste aus config/teilnehmer.json + data/zusatz_spieler.csv.
+    Ausschluss per ID (primär) oder Name (Fallback) via config/ausschluss.txt.
+    Zusatzfragen-Antworten werden aus 'zusatz'-Feld in JSON in ZUSATZ_ANTWORTEN gespeichert."""
+    global ZUSATZ_ANTWORTEN
     path = os.path.join(CONFIG_DIR, 'teilnehmer.json')
     if not os.path.exists(path):
         raise FileNotFoundError(
             f'Teilnehmerliste fehlt: {path}\n'
-            f'Bitte config/teilnehmer.json mit Feldern id/name/rank erstellen.\n'
-            f'Beispiel: [{{"id":"abc12","name":"Max M","rank":1}}]'
+            f'Bitte config/find_gruppe.py ausführen um die Teilnehmer zu laden.'
         )
     with open(path, encoding='utf-8') as f:
         members = json.load(f)
-    print(f'   Teilnehmer geladen: {len(members)} aus config/teilnehmer.json')
+
+    # Zusatzfragen-Antworten aus JSON extrahieren
+    for m in members:
+        if m.get('zusatz'):
+            ZUSATZ_ANTWORTEN[m['name']] = dict(m['zusatz'])
+        m.pop('zusatz', None)  # nicht in MEMBERS-Liste behalten
+
+    # Ausschluss per ID (primär) oder Name (Fallback)
+    excl_ids, excl_names = _parse_ausschluss()
+    def is_excluded(m):
+        return m['id'] in excl_ids or m['name'].lower() in excl_names
+    members = [m for m in members if not is_excluded(m)]
+
+    # Zusätzliche Spieler aus data/zusatz_spieler.csv hinzufügen
+    extra_path = os.path.join(BASE_DIR, 'data', 'zusatz_spieler.csv')
+    if os.path.exists(extra_path):
+        existing_ids = {m['id'] for m in members}
+        with open(extra_path, encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                eid  = row.get('id',   '').strip()
+                ename = row.get('name', '').strip()
+                if eid and ename and eid not in existing_ids:
+                    if eid not in excl_ids and ename.lower() not in excl_names:
+                        members.append({'id': eid, 'name': ename, 'rank': len(members) + 1})
+                        existing_ids.add(eid)
+
+    if excl_ids or excl_names:
+        all_excl = sorted(excl_names | excl_ids)
+        print(f'   Ausgeschlossen: {", ".join(all_excl)}')
+    if ZUSATZ_ANTWORTEN:
+        print(f'   Zusatzfragen-Antworten geladen: {len(ZUSATZ_ANTWORTEN)} Einträge')
+    print(f'   Teilnehmer geladen: {len(members)} (inkl. Zusatzspieler)')
     return members
 
 MEMBERS = _load_members()
@@ -258,7 +345,7 @@ def fetch_all(session, rounds):
     return games_meta, player_data
 
 # ── CSVs schreiben ────────────────────────────────────────────
-def write_csvs(games_meta, player_data, today):
+def write_csvs(games_meta, player_data, today, zusatz_data=None):
     sorted_games = sorted(games_meta.values(),
                           key=lambda g: g['event_date'])
     played_games = [g for g in sorted_games
@@ -288,25 +375,28 @@ def write_csvs(games_meta, player_data, today):
     rows2 = [hdr2]
 
     cum_pts  = {m['id']: 0 for m in MEMBERS}
+    id_to_name = {m['id']: m['name'] for m in MEMBERS}
+    zus_pts = {m['id']: (zusatz_data or {}).get(id_to_name[m['id']], {}).get('punkte', 0) for m in MEMBERS}
     game_num = 0
     for g in played_games:
         for m in MEMBERS:
             pd = player_data[m['id']].get(g['bet_id'])
             cum_pts[m['id']] += (pd['score'] if pd and pd['score'] is not None else 0)
 
-        sorted_m = sorted(MEMBERS, key=lambda m: cum_pts[m['id']], reverse=True)
+        sorted_m = sorted(MEMBERS, key=lambda m: cum_pts[m['id']] + zus_pts[m['id']], reverse=True)
         ranks, prev_pts, prev_rank = {}, None, 0
         for i, m in enumerate(sorted_m):
-            if cum_pts[m['id']] != prev_pts:
+            total = cum_pts[m['id']] + zus_pts[m['id']]
+            if total != prev_pts:
                 prev_rank = i + 1
-                prev_pts  = cum_pts[m['id']]
+                prev_pts  = total
             ranks[m['id']] = prev_rank
 
         game_num += 1
         d   = datetime.fromisoformat(g['event_date'].replace('Z','+00:00'))
         row = [game_num, d.strftime('%d.%m.%Y'), g['match']]
         for m in MEMBERS:
-            row += [ranks[m['id']], cum_pts[m['id']]]
+            row += [ranks[m['id']], cum_pts[m['id']] + zus_pts[m['id']]]
         rows2.append(row)
 
     def save_csv(rows, path):
@@ -389,104 +479,134 @@ _FINALS_POS = {
     ],
 }
 
-ZUSATZ_CSV = os.path.join(DATA_DIR, f'{KUERZEL}_Zusatzfragen.csv')
+# Zusatzfragen-Punkte werden lokal aus Spieldaten berechnet (kein CSV mehr)
 ZUSATZ_KEYS = ['wm', 'ch', 't_ch', 't_k', 'nullnull']
+ZUSATZ_PTS_KEYS = ['p_wm', 'p_ch', 'p_t_ch', 'p_t_k', 'p_nullnull']
 
-def load_zusatzfragen():
-    """Liest WM_Zusatzfragen.csv und gibt {name: {wm,ch,...,punkte}} zurück."""
-    if not os.path.exists(ZUSATZ_CSV):
-        return None  # noch nicht vorhanden
-    result = {}
-    with open(ZUSATZ_CSV, encoding='utf-8-sig') as f:
-        reader = csv.DictReader(f, delimiter=';')
-        for row in reader:
-            name = row.get('Name', '').strip()
-            if not name: continue
-            entry = {}
-            for k in ZUSATZ_KEYS:
-                v = row.get(k, '').strip()
-                # Zahlen als int speichern
-                try:    entry[k] = int(v)
-                except: entry[k] = v if v else None
-            try:    entry['punkte'] = int(row.get('punkte', 0) or 0)
-            except: entry['punkte'] = 0
-            result[name] = entry
-    # Prüfen ob echte Antworten vorhanden (nicht nur None/leere Werte)
-    has_real = any(
-        v not in (None, '', 0) and k not in ('punkte',)
-        for entry in result.values()
-        for k, v in entry.items()
-    )
-    if not has_real:
-        print('   ℹ️  WM_Zusatzfragen.csv enthält nur leere Werte – wird neu abgerufen.')
-        return None
-    print(f'   ✅ WM_Zusatzfragen.csv geladen ({len(result)} Einträge)')
-    return result
+def _normalize_runde(runde):
+    """Normalisiert Runden-Bezeichnungen für Vergleich (verschiedene Formate)."""
+    if not runde:
+        return ''
+    r = str(runde).lower().strip().replace('-', '').replace(' ', '')
+    if any(x in r for x in ['halbfinal', '1/2', 'semifinal']):  return 'halbfinale'
+    if any(x in r for x in ['viertelfinal', '1/4', 'quarterfinal']): return 'viertelfinale'
+    if any(x in r for x in ['achtelfinal', '1/8', 'roundof16']): return 'achtelfinale'
+    if any(x in r for x in ['sechzehntel', '1/16', 'roundof32']): return 'sechzehntelfinale'
+    if any(x in r for x in ['zweiunddrei', '1/32', 'roundof64']): return 'zweiunddreissigstefinale'
+    if r in ('final', 'finale', 'f', '1/1'):                    return 'finale'
+    if any(x in r for x in ['gruppe', 'vorrunde', 'group']):    return 'gruppenphase'
+    return r
 
-def save_zusatzfragen(zusatz_data):
-    """Speichert Zusatzfragen-Dict als WM_Zusatzfragen.csv.
-    Speichert NUR wenn mindestens ein echter (nicht-null) Wert vorhanden ist."""
-    if not zusatz_data:
-        return
-    # Prüfen ob echte Antworten vorhanden (nicht nur None-Werte)
-    has_real = any(
-        v not in (None, '') and k != 'punkte'
-        for entry in zusatz_data.values()
-        for k, v in entry.items()
-    )
-    if not has_real:
-        print('   ℹ️  Zusatzfragen: nur leere Werte – CSV wird nicht gespeichert.')
-        return
-    fieldnames = ['Name'] + ZUSATZ_KEYS + ['punkte']
-    with open(ZUSATZ_CSV, 'w', newline='', encoding='utf-8-sig') as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';',
-                           extrasaction='ignore')
-        w.writeheader()
-        for name, vals in zusatz_data.items():
-            row = {'Name': name, 'punkte': vals.get('punkte', 0)}
-            for k in ZUSATZ_KEYS:
-                row[k] = vals.get(k, '')
-            w.writerow(row)
-    print(f'   ✅ WM_Zusatzfragen.csv gespeichert ({len(zusatz_data)} Einträge)')
+def calc_zusatz_punkte(games_meta):
+    """Berechnet Bonus-Punkte für alle Spieler aus ZUSATZ_ANTWORTEN (teilnehmer.json).
+    Richtige Antworten werden aus games_meta + Torschützenliste abgeleitet.
+    Punkte: wm=50, ch/t_ch/t_k/nullnull=20 je."""
+    if not ZUSATZ_ANTWORTEN:
+        print('   (keine Zusatzantworten in teilnehmer.json – übersprungen)')
+        return {}
 
-def fetch_zusatzfragen(session):
-    """Liest Zusatzfragen von SRF (Komponente TextSelection, Runde 40).
-    Struktur: bet.picks[0] = ID, bet.answers = [{id, name}]
-    Gibt {name: {wm, ch, t_ch, t_k, nullnull, punkte}} zurück."""
-    FIELD_KEYS = ['wm', 'ch', 't_ch', 't_k', 'nullnull']
+    PUNKTE = {'wm': 50, 'ch': 20, 't_ch': 20, 't_k': 20, 'nullnull': 20}
+    CH_NAMES = ['schweiz', 'switzerland', 'suisse', 'svizzera']
+    RUNDEN_ORDER = ['gruppenphase', 'zweiunddreissigstefinale', 'sechzehntelfinale',
+                    'achtelfinale', 'viertelfinale', 'halbfinale', 'finale']
+
+    sorted_games = sorted(games_meta.values(), key=lambda g: g['event_date'])
+
+    # Weltmeister: Sieger des Finales
+    weltmeister = None
+    for g in sorted_games:
+        if _normalize_runde(g.get('roundName','')) == 'finale':
+            fr = g.get('final_results')
+            if fr and len(fr) >= 2:
+                teams = g['match'].split(' vs ')
+                if len(teams) == 2:
+                    if fr[0] > fr[1]: weltmeister = teams[0].strip()
+                    elif fr[1] > fr[0]: weltmeister = teams[1].strip()
+
+    # Schweiz: höchste erreichte Runde
+    ch_runde = 'gruppenphase'
+    for g in sorted_games:
+        if any(n in g['match'].lower() for n in CH_NAMES):
+            rn = _normalize_runde(g.get('roundName', ''))
+            if rn in RUNDEN_ORDER and RUNDEN_ORDER.index(rn) > RUNDEN_ORDER.index(ch_runde):
+                ch_runde = rn
+
+    # Tore Schweiz: alle Tore in allen Spielen
+    ch_goals = 0
+    for g in sorted_games:
+        fr = g.get('final_results')
+        if not fr or len(fr) < 2: continue
+        parts = g['match'].split(' vs ')
+        if len(parts) != 2: continue
+        t1, t2 = parts[0].strip().lower(), parts[1].strip().lower()
+        if any(n in t1 for n in CH_NAMES): ch_goals += fr[0]
+        elif any(n in t2 for n in CH_NAMES): ch_goals += fr[1]
+
+    # 0:0 Spiele
+    nullnull = sum(1 for g in sorted_games
+                   if g.get('final_results') and g['final_results'] == [0, 0])
+
+    # Torschützenkönig: Tore des Führenden
+    scorers, _ = fetch_torschuetzen()
+    t_k = scorers[0]['tore'] if scorers else None
+
+    # Finale gespielt? Nur dann WM, Torschützenkönig und 0:0 auswerten
+    final_played = weltmeister is not None
+
+    print(f'   Richtige Antworten: WM={weltmeister or "offen (Finale ausstehend)"}, '
+          f'CH={ch_runde}, Tore CH={ch_goals}, '
+          f'Torschützenkönig={t_k or "offen"} ({"final" if final_played else "offen"}), '
+          f'0:0={nullnull} ({"final" if final_played else "offen"})')
+
+    # Punkte pro Spieler berechnen
     zusatz = {}
+    for name, ant in ZUSATZ_ANTWORTEN.items():
+        entry = dict(ant)
+        total = 0
 
-    for m in MEMBERS:
+        # Weltmeister (50 Punkte) – nur nach Finale
+        p = 0
+        if final_played and weltmeister and ant.get('wm'):
+            if str(ant['wm']).strip().lower() == weltmeister.strip().lower():
+                p = PUNKTE['wm']
+        entry['p_wm'] = p; total += p
+
+        # Schweiz Runde (20 Punkte) – sofort auswertbar
+        p = 0
+        if ant.get('ch') and _normalize_runde(ant['ch']) == ch_runde:
+            p = PUNKTE['ch']
+        entry['p_ch'] = p; total += p
+
+        # Tore Schweiz (20 Punkte) – sofort auswertbar
+        p = 0
         try:
-            url  = f'{BASE_URL}/users/{m["id"]}/round/40'
-            resp = session.get(url, timeout=20)
-            if resp.status_code != 200:
-                print(f'  ⚠️  {m["name"]}: HTTP {resp.status_code}')
-                continue
-            doc  = BeautifulSoup(resp.text, 'html.parser')
-            bets = doc.find_all(attrs={'data-react-class': 'TextSelection'})
-            if not bets:
-                print(f'  ⚠️  {m["name"]}: keine TextSelection-Komponente gefunden (Seite übersprungen)')
-                continue
-            answers = {}
-            total_score = 0
-            for i, el in enumerate(bets):
-                bet = json.loads(el.get('data-react-props', '{}')).get('bet', {})
-                # Antwort-Lookup: picks[0] ist die ID, answers-Liste gibt den Namen
-                picks    = bet.get('picks', [])
-                ans_map  = {a['id']: a['name'] for a in bet.get('answers', [])}
-                answer   = ans_map.get(picks[0]) if picks else None
-                total_score += int(bet.get('total_score') or 0)
-                key = FIELD_KEYS[i] if i < len(FIELD_KEYS) else f'q{i}'
-                answers[key] = answer
-            if answers:
-                answers['punkte'] = total_score
-                zusatz[m['name']] = answers
-        except Exception as e:
-            print(f'  ⚠️  Zusatzfragen {m["name"]}: {e}')
-        time.sleep(0.1)
+            if ant.get('t_ch') is not None and int(ant['t_ch']) == ch_goals:
+                p = PUNKTE['t_ch']
+        except (ValueError, TypeError): pass
+        entry['p_t_ch'] = p; total += p
 
-    print(f'   ✅ Zusatzfragen: {len(zusatz)}/{len(MEMBERS)} Einträge geladen')
+        # Tore Torschützenkönig (20 Punkte) – nur nach Finale
+        p = 0
+        if final_played:
+            try:
+                if t_k is not None and ant.get('t_k') is not None and int(ant['t_k']) == t_k:
+                    p = PUNKTE['t_k']
+            except (ValueError, TypeError): pass
+        entry['p_t_k'] = p; total += p
+
+        # Anzahl 0:0 (20 Punkte) – nur nach Finale
+        p = 0
+        if final_played:
+            try:
+                if ant.get('nullnull') is not None and int(ant['nullnull']) == nullnull:
+                    p = PUNKTE['nullnull']
+            except (ValueError, TypeError): pass
+        entry['p_nullnull'] = p; total += p
+
+        entry['punkte'] = total
+        zusatz[name] = entry
+
+    print(f'   ✅ Zusatzpunkte berechnet: {len(zusatz)} Spieler')
     return zusatz
 
 
@@ -808,6 +928,14 @@ def embed_in_html(rang_path, tipps_path, games_meta=None, zusatz_data=None):
     html = re.sub(r'/\*TIPPS_DATA\*/.*?/\*END_TIPPS\*/',
                   f'/*TIPPS_DATA*/{tipps_data}/*END_TIPPS*/', html, flags=re.DOTALL)
 
+
+    # Config-Daten (hidden players + extra players) aus lokalen CSVs injizieren
+    cfg_hidden, cfg_extra = load_config_csvs()
+    html = re.sub(r'/\*CFG_HIDDEN\*/.*?/\*END_CFG_HIDDEN\*/',
+                  f'/*CFG_HIDDEN*/{cfg_hidden}/*END_CFG_HIDDEN*/', html, flags=re.DOTALL)
+    html = re.sub(r'/\*CFG_EXTRA\*/.*?/\*END_CFG_EXTRA\*/',
+                  f'/*CFG_EXTRA*/{cfg_extra}/*END_CFG_EXTRA*/', html, flags=re.DOTALL)
+
     # Finalspiele-Daten (echte Teams + Resultate)
     finals_data = build_finals_data(games_meta) if games_meta else {}
 
@@ -1017,10 +1145,60 @@ def update_index_html():
     print(f'   ✅ index.html: "{TURNIER["name"]}" zur Turnierauswahl hinzugefügt')
 
 # ── GitHub Pages Upload ───────────────────────────────────────
-# Token aus config/github_token.txt lesen
-_token_file = os.path.join(CONFIG_DIR, 'github_token.txt')
-GITHUB_TOKEN = open(_token_file, encoding='utf-8').read().strip() if os.path.exists(_token_file) else ""
-GITHUB_REPO  = "Diavolezza64/Fussball-Tippspiel-Daniel"
+# Token + Repo aus config/-Dateien lesen (nie im Code speichern)
+def _read_config(filename, default=""):
+    path = os.path.join(CONFIG_DIR, filename)
+    try:
+        with open(path, encoding='utf-8') as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return default
+
+GITHUB_TOKEN = _read_config('github_token.txt')
+GITHUB_REPO  = _read_config('github_repo.txt', 'Diavolezza64/Fussball-Tippspiel-Beat')
+
+
+def load_config_csvs():
+    """Liest config/ausschluss.txt (ehemalige) und data/zusatz_spieler.csv.
+    Gibt JSON-Strings zurück, die in die HTML-Marker injiziert werden."""
+    import json as _json
+
+    # Ehemalige aus ausschluss.txt lesen (Format: 'ID;Name' oder 'Name')
+    ausschluss_path = os.path.join(CONFIG_DIR, 'ausschluss.txt')
+    hidden = []
+    if os.path.exists(ausschluss_path):
+        with open(ausschluss_path, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if ';' in line:
+                    # ID;Name → nur Name extrahieren
+                    name = line.split(';', 1)[1].strip()
+                else:
+                    name = line
+                if name:
+                    hidden.append(name)
+
+    # Zusatzspieler aus data/zusatz_spieler.csv
+    extra_path = os.path.join(BASE_DIR, 'data', 'zusatz_spieler.csv')
+    extra = []
+    if os.path.exists(extra_path):
+        with open(extra_path, encoding='utf-8') as f:
+            rows = list(csv.DictReader(f))
+            extra = [{'name': r.get('name','').strip(), 'id': r.get('id','').strip()}
+                     for r in rows if r.get('name','').strip()]
+
+    return _json.dumps(hidden, ensure_ascii=False), _json.dumps(extra, ensure_ascii=False)
+
+
+def strip_config_from_html(html):
+    """Entfernt CFG-Daten aus HTML bevor es auf GitHub hochgeladen wird."""
+    html = re.sub(r'/\*CFG_HIDDEN\*/.*?/\*END_CFG_HIDDEN\*/',
+                  '/*CFG_HIDDEN*/null/*END_CFG_HIDDEN*/', html, flags=re.DOTALL)
+    html = re.sub(r'/\*CFG_EXTRA\*/.*?/\*END_CFG_EXTRA\*/',
+                  '/*CFG_EXTRA*/[]/*END_CFG_EXTRA*/', html, flags=re.DOTALL)
+    return html
 
 def upload_to_github():
     """Lädt WM_Rangverlauf.html als index.html auf GitHub hoch (erstellt oder aktualisiert)."""
@@ -1051,8 +1229,9 @@ def upload_to_github():
             print(f'   ⚠️  GitHub SHA-Abruf fehlgeschlagen: {e.code}')
             return
 
-    with open(html_path, 'rb') as f:
-        content_b64 = base64.b64encode(f.read()).decode('ascii')
+    with open(html_path, 'r', encoding='utf-8') as f:
+        html_for_upload = strip_config_from_html(f.read())
+    content_b64 = base64.b64encode(html_for_upload.encode('utf-8')).decode('ascii')
 
     payload = {"message": f"Update WM Rangliste {datetime.now().strftime('%Y-%m-%d')}", "content": content_b64}
     if sha:
@@ -1068,9 +1247,164 @@ def upload_to_github():
         print(f'   ⚠️  GitHub-Upload fehlgeschlagen ({e.code}): {msg}')
 
 
+def _self_update():
+    """Aktualisiert wm_auto.py selbst von GitHub und startet neu falls geändert.
+    Funktioniert unabhängig davon wo der Ordner liegt oder welches Start-Script verwendet wird."""
+    import urllib.request as urlreq, sys
+    src_file = os.path.join(CONFIG_DIR, 'update_source.txt')
+    if not os.path.exists(src_file):
+        return
+    base = open(src_file, encoding='utf-8').read().strip()
+    url  = f'{base}/tools/wm_auto.py'
+    try:
+        req  = urlreq.Request(url, headers={'User-Agent': 'tippspiel'})
+        new  = urlreq.urlopen(req, timeout=15).read()
+        self = os.path.abspath(__file__)
+        if new != open(self, 'rb').read():
+            with open(self, 'wb') as f:
+                f.write(new)
+            print('   ✅ wm_auto.py aktualisiert – starte neu …')
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception:
+        pass  # offline oder kein Update nötig
+
+
+def _update_html_template():
+    """Lädt die neueste WM_Rangverlauf.html von GitHub falls update_source.txt vorhanden."""
+    import urllib.request as urlreq
+    html_datei = TURNIER.get('html_datei', 'WM_Rangverlauf.html')
+    src_file  = os.path.join(CONFIG_DIR, 'update_source.txt')
+    html_file = os.path.join(BASE_DIR, 'web', html_datei)
+    if not os.path.exists(src_file):
+        return
+    base = open(src_file, encoding='utf-8').read().strip()
+    url  = f'{base}/web/{html_datei}'
+    try:
+        req = urlreq.Request(url, headers={'User-Agent': 'tippspiel'})
+        data = urlreq.urlopen(req, timeout=30).read()
+        with open(html_file, 'wb') as f:
+            f.write(data)
+        print(f'   ✅ HTML-Template aktualisiert')
+    except Exception as e:
+        print(f'   ℹ️  HTML-Template Update übersprungen: {e}')
+
+
+def _auto_github_setup():
+    """
+    Richtet Git + GitHub automatisch ein falls:
+    - config/github_token.txt vorhanden
+    - aber noch kein .git Verzeichnis existiert
+    Repo-Name wird aus dem Ordnernamen abgeleitet.
+    """
+    import urllib.request as urlreq
+    token_file = os.path.join(CONFIG_DIR, 'github_token.txt')
+    repo_file  = os.path.join(CONFIG_DIR, 'github_repo.txt')
+    git_dir    = os.path.join(BASE_DIR, '.git')
+
+    if os.path.exists(git_dir) or not os.path.exists(token_file):
+        return  # Bereits eingerichtet oder kein Token
+
+    token = open(token_file, encoding='utf-8').read().strip()
+    if not token:
+        return
+
+    print('→ GitHub Ersteinrichtung …')
+
+    # Username via API
+    try:
+        req = urlreq.Request('https://api.github.com/user',
+            headers={'Authorization': f'token {token}', 'User-Agent': 'tippspiel'})
+        user = json.loads(urlreq.urlopen(req, timeout=10).read())
+        gh_user = user.get('login', '')
+        gh_name = user.get('name', gh_user)
+        gh_email = user.get('email', '') or f'{gh_user}@github.com'
+    except Exception as e:
+        print(f'   ⚠️  GitHub-API nicht erreichbar: {e}')
+        return
+
+    # Repo-Name aus Ordnername ableiten (Fussball-Tippspiel-Daniel-main → Fussball-Tippspiel-Daniel)
+    folder = os.path.basename(BASE_DIR)
+    repo_name = folder.removesuffix('-main').removesuffix('-master')
+
+    print(f'   Benutzer : {gh_user}')
+    print(f'   Repo     : {repo_name}')
+
+    # git init + remote
+    os.system(f'git -C "{BASE_DIR}" init -b main')
+    os.system(f'git -C "{BASE_DIR}" config user.email "{gh_email}"')
+    os.system(f'git -C "{BASE_DIR}" config user.name "{gh_name}"')
+    remote = f'https://{token}@github.com/{gh_user}/{repo_name}.git'
+    os.system(f'git -C "{BASE_DIR}" remote remove origin 2>/dev/null || true')
+    os.system(f'git -C "{BASE_DIR}" remote add origin "{remote}"')
+
+    # Repo speichern
+    with open(repo_file, 'w') as f:
+        f.write(f'{gh_user}/{repo_name}')
+
+    # Initialer Push (nach wm_auto.py Durchlauf, nicht jetzt)
+    # Marker setzen damit upload_to_github() weiss dass git push nötig ist
+    print(f'   ✅ Git eingerichtet → wird nach Datenupdate gepusht')
+
+
+def _git_push_if_setup():
+    """Pusht falls .git vorhanden. Token wird verwendet wenn vorhanden (andere User),
+    sonst macOS Keychain (Beat).
+    Schreibt ausserdem die bereinigte WM_Rangverlauf.html als index.html ins Root,
+    damit GitHub Pages aktuell bleibt – ohne API-Token."""
+    import subprocess
+    git_dir    = os.path.join(BASE_DIR, '.git')
+    token_file = os.path.join(CONFIG_DIR, 'github_token.txt')
+    repo_file  = os.path.join(CONFIG_DIR, 'github_repo.txt')
+
+    if not os.path.exists(git_dir):
+        return  # Kein git-Repo → überspringen
+
+    # Root index.html aus WM_Rangverlauf.html erzeugen (private Daten entfernen)
+    html_src  = os.path.join(WEB_DIR, TURNIER.get('html_datei', 'WM_Rangverlauf.html'))
+    index_dst = os.path.join(BASE_DIR, 'index.html')
+    if os.path.exists(html_src):
+        try:
+            with open(html_src, encoding='utf-8') as f:
+                html = strip_config_from_html(f.read())
+            with open(index_dst, 'w', encoding='utf-8') as f:
+                f.write(html)
+        except Exception as e:
+            print(f'   ⚠️  index.html konnte nicht erzeugt werden: {e}')
+
+    # Token + Repo-URL setzen falls vorhanden (für Daniel/andere)
+    if os.path.exists(token_file) and os.path.exists(repo_file):
+        token   = open(token_file, encoding='utf-8').read().strip()
+        gh_repo = open(repo_file,  encoding='utf-8').read().strip()
+        if token and gh_repo:
+            remote = f'https://{token}@github.com/{gh_repo}.git'
+            subprocess.run(['git', '-C', BASE_DIR, 'remote', 'set-url', 'origin', remote],
+                           capture_output=True)
+
+    subprocess.run(['git', '-C', BASE_DIR, 'add', '.'], capture_output=True)
+    result = subprocess.run(['git', '-C', BASE_DIR, 'diff', '--cached', '--quiet'],
+                            capture_output=True)
+    if result.returncode == 1:  # Änderungen vorhanden
+        from datetime import datetime as dt
+        msg = f'Auto-Update {dt.now().strftime("%Y-%m-%d %H:%M")}'
+        subprocess.run(['git', '-C', BASE_DIR, 'commit', '-m', msg], capture_output=True)
+        r = subprocess.run(['git', '-C', BASE_DIR, 'push', '-u', 'origin', 'main'],
+                           capture_output=True)
+        if r.returncode == 0:
+            print('   ✅ GitHub aktualisiert')
+        else:
+            print('   ⚠️  GitHub-Push fehlgeschlagen')
+
+
 def main():
     today = datetime.now().strftime('%Y-%m-%d')
     print(f'\n🏆 {TURNIER["name"]} – Abruf {today}')
+
+    _self_update()   # Aktualisiert sich selbst von GitHub, startet neu falls nötig
+
+    _auto_github_setup()
+
+    # HTML-Template aktualisieren falls update_source.txt vorhanden
+    _update_html_template()
 
     print('→ Browser-Session aufbauen …')
     session = make_session()
@@ -1082,21 +1416,13 @@ def main():
     print(f'→ Daten abrufen ({len(MEMBERS)} Spieler × {len(rounds)} Runden) …')
     games_meta, player_data = fetch_all(session, rounds)
 
-    print('→ Zusatzfragen …')
-    zusatz_data = load_zusatzfragen()
-    if zusatz_data is None:
-        print('   WM_Zusatzfragen.csv fehlt – hole von SRF …')
-        zusatz_data = fetch_zusatzfragen(session)
-        save_zusatzfragen(zusatz_data)   # speichert nur wenn echte Daten vorhanden
-        if not zusatz_data:
-            zusatz_data = {}
-    else:
-        print('   (aus CSV, kein Abruf nötig)')
+    print('→ Zusatzfragen auswerten …')
+    zusatz_data = calc_zusatz_punkte(games_meta)
 
     print('→ CSVs schreiben …')
     rang_path  = os.path.join(DATA_DIR, f'{KUERZEL}_Rangverlauf_{today}.csv')
     tipps_path = os.path.join(DATA_DIR, f'{KUERZEL}_Tipps_{today}.csv')
-    write_csvs(games_meta, player_data, today)
+    write_csvs(games_meta, player_data, today, zusatz_data=zusatz_data)
 
     print('→ PDF generieren …')
     generate_pdf()
@@ -1131,6 +1457,7 @@ def main():
 
     print('→ GitHub Pages aktualisieren …')
     upload_to_github()
+    _git_push_if_setup()
 
     print('→ index.html aktualisieren …')
     update_index_html()
