@@ -1,0 +1,2 @@
+# Ehemalige Mitglieder (Format: ID;Name oder nur Name)
+# Leer = keine ehemaligen
