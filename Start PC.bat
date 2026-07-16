@@ -10,6 +10,41 @@ echo Fussball Tippspiel - Daten werden aktualisiert ...
 echo ================================================
 echo.
 
+:: Auto-Update: neueste Code-Version vom Master laden
+set FALLBACK_BASE=https://raw.githubusercontent.com/Diavolezza64/Fussball-Tippspiel-Beat/main
+set UPDATE_SRC=%~dp0config\update_source.txt
+set BASE=
+if exist "%UPDATE_SRC%" (
+    set /p BASE=<"%UPDATE_SRC%"
+)
+if "!BASE!"=="" set BASE=%FALLBACK_BASE%
+
+echo -^> Code-Update vom Master ...
+set UPDATED=0
+for %%f in (wm_chart.py gen_rangliste.py debug_zusatz.py fetch_em_archiv.py fetch_wm_archiv.py wm2026_squads.py) do (
+    curl -sf --max-time 15 "!BASE!/tools/%%f" -o "tools\%%f.tmp" >nul 2>&1
+    if exist "tools\%%f.tmp" (
+        move /y "tools\%%f.tmp" "tools\%%f" >nul
+        set /a UPDATED+=1
+    )
+)
+curl -sf --max-time 30 "!BASE!/web/WM_Rangverlauf.html" -o "web\WM_Rangverlauf.html.tmp" >nul 2>&1
+if exist "web\WM_Rangverlauf.html.tmp" (
+    move /y "web\WM_Rangverlauf.html.tmp" "web\WM_Rangverlauf.html" >nul
+    set /a UPDATED+=1
+)
+curl -sf --max-time 15 "!BASE!/web/index.html" -o "web\index.html.tmp" >nul 2>&1
+if exist "web\index.html.tmp" (
+    move /y "web\index.html.tmp" "web\index.html" >nul
+    set /a UPDATED+=1
+)
+if !UPDATED! gtr 0 (
+    echo    !UPDATED! Dateien aktualisiert
+) else (
+    echo    ^(offline oder keine Aenderungen^)
+)
+echo.
+
 set PYTHON_CMD=
 
 :: 1) py Launcher (empfohlen auf Windows)
@@ -44,7 +79,7 @@ for /f "delims=" %%p in ('where python 2^>nul') do (
     )
 )
 
-:: 4) Direkte Installationspfade pruefen (nach frueherer Installation)
+:: 4) Direkte Installationspfade pruefen
 for %%p in (
     "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
@@ -61,7 +96,6 @@ echo.
 
 set INSTALL_OK=0
 
-:: Versuch 1: winget mit verschiedenen Paket-IDs
 where winget >nul 2>&1
 if %errorlevel%==0 (
     echo Versuche winget ...
@@ -71,7 +105,6 @@ if %errorlevel%==0 (
     if !errorlevel!==0 ( set INSTALL_OK=1 & goto after_install )
 )
 
-:: Versuch 2: PowerShell-Download
 echo Lade Python-Installer herunter (ca. 25 MB) ...
 powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.13.3/python-3.13.3-amd64.exe' -OutFile '%TEMP%\python_setup.exe'" >nul 2>&1
 if exist "%TEMP%\python_setup.exe" (
@@ -96,35 +129,11 @@ echo.
 echo Python konnte nicht installiert werden.
 echo Bitte manuell installieren: https://python.org
 echo Beim Installieren "Add Python to PATH" anklicken.
-echo Danach dieses Fenster neu starten.
 goto done
 
 :run_python
 echo Python: %PYTHON_CMD%
 %PYTHON_CMD% tools\wm_auto.py
-
-:: GitHub: Aenderungen automatisch pushen (nur wenn Git eingerichtet ist)
-if exist ".git" (
-    where git >nul 2>&1
-    if !errorlevel!==0 (
-        git add . >nul 2>&1
-        git diff --cached --quiet >nul 2>&1
-        if !errorlevel!==1 (
-            git commit -m "Auto-Update %date% %time:~0,5%" >nul 2>&1
-            git push >nul 2>&1
-            if !errorlevel!==0 (
-                echo GitHub aktualisiert
-            ) else (
-                echo GitHub-Push fehlgeschlagen ^(kein Internet?^)
-            )
-        )
-    )
-)
-
-:open_browser
-if exist "web\index.html" (
-    start "" "web\index.html"
-)
 
 :done
 echo.
