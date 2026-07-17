@@ -952,7 +952,7 @@ def fetch_srf_leaderboard(session):
         return {}
     base_url = f'https://{TURNIER["srf_host"]}'
     result = {}
-    print(f'   Gruppen-IDs: {group_ids}, Host: {base_url}')
+    print(f'   Debug – Gruppen: {group_ids}, Host: {base_url}')
     for group_id in group_ids:
         for prefix in ('communities', 'leagues', 'ligen', 'groups'):
             url = f'{base_url}/{prefix}/{group_id}'
@@ -967,8 +967,8 @@ def fetch_srf_leaderboard(session):
                 for el in doc.find_all(attrs={'data-react-class': True}):
                     try:
                         props = json.loads(el['data-react-props'])
-                        top_keys = list(props.keys()) if isinstance(props, dict) else []
-                        print(f'   [{el.get("data-react-class")}] keys: {top_keys[:10]}')
+                        top_keys = list(props.keys())[:12] if isinstance(props, dict) else []
+                        print(f'   [{el.get("data-react-class")}] keys: {top_keys}')
                         entries = _parse_srf_lb_props(props)
                         if len(entries) >= 3:
                             for pos, e in enumerate(entries, 1):
@@ -980,7 +980,7 @@ def fetch_srf_leaderboard(session):
                                 print(f'   ✅ SRF-Leaderboard: {len(result)} Einträge ({url})')
                                 return result
                     except Exception as ex:
-                        print(f'   parse ex: {ex}')
+                        print(f'   parse-ex: {ex}')
                 time.sleep(0.2)
             except Exception as e:
                 print(f'   ⚠️  {url}: {e}')
