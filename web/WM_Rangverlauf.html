@@ -1302,38 +1302,35 @@ function calcEinPunkt(){
     return rows;
   }
 
-  const phases=[
-    {label:'1–24',   fi:0,       ti:23},
-    {label:'25–48',  fi:24,      ti:47},
-    {label:`49–${Math.min(lastG,72)}`, fi:48, ti:Math.min(71,n-1)},
-    {label:'FS',     fi:koFirst, ti:n-1},
-    {label:'Total',  fi:0,       ti:n-1}
-  ];
-  const totalRows=scoreRange(0,n-1);
-  if(!totalRows){el.innerHTML='';return;}
-  const phScores=phases.map(ph=>{
-    const rows=scoreRange(ph.fi,ph.ti);
-    const m={};if(rows)rows.forEach(r=>m[r.name]=r.points);return m;
-  });
-  const trows=totalRows.map((r,i)=>{
-    const bg=r.rank===1?'background:#fffbe6':r.rank===2?'background:#f5f5f5':r.rank===3?'background:#fff4ee':(i%2?'background:#f7f7f9':'');
-    const dot=r.name===VIRT_FIFA||r.name===VIRT_MW?'':
-      `<span style="display:inline-block;width:7px;height:7px;border-radius:1px;background:${r.color};margin-right:4px;vertical-align:middle"></span>`;
-    const cells=phScores.map((ps,pi)=>{
-      const v=ps[r.name]??0;
-      const tot=pi===phases.length-1;
-      return `<td style="text-align:right;padding:2px 8px;font-size:9.5px;${tot?'font-weight:600;color:#1a50a0;border-left:1px solid rgba(0,0,0,0.15);':''}">${v}</td>`;
+  function tbl(label,rows){
+    if(!rows) return `<div style="flex:1;min-width:175px"><div style="font-size:9.5px;font-weight:bold;color:#6c6c70;margin-bottom:5px">${label}</div><div style="color:#555;font-size:10px">–</div></div>`;
+    const trows=rows.map(r=>{
+      const bg=r.rank===1?'background:#fffbe6':r.rank===2?'background:#f5f5f5':r.rank===3?'background:#fff4ee':'';
+      return `<tr style="${bg}"><td class="rank-num" style="width:18px">${r.rank}</td>
+        <td style="font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          <span style="display:inline-block;width:7px;height:7px;border-radius:1px;background:${r.color};margin-right:4px;vertical-align:middle;flex-shrink:0"></span>${r.name}
+        </td><td class="rank-pts" style="width:28px">${r.points}</td></tr>`;
     }).join('');
-    return `<tr style="${bg}"><td class="rank-num" style="width:18px">${r.rank}</td>
-      <td style="font-size:9.5px;white-space:nowrap;padding:2px 6px">${dot}${r.name}</td>${cells}</tr>`;
-  }).join('');
-  const hdrCells=phases.map((ph,i)=>`<th style="text-align:right;padding:2px 8px;font-size:8.5px;color:#444;white-space:nowrap;${i===phases.length-1?'border-left:1px solid rgba(0,0,0,0.15);':''}">${ph.label}</th>`).join('');
+    return `<div style="flex:1;min-width:175px">
+      <div style="font-size:9.5px;font-weight:bold;color:#6c6c70;margin-bottom:5px">${label}</div>
+      <table class="ptable" style="width:100%;table-layout:fixed">
+        <thead><tr><th style="width:18px">#</th><th>Name</th><th style="width:28px" class="num-right">Pkt</th></tr></thead>
+        <tbody>${trows}</tbody></table></div>`;
+  }
+
+  const phases=[
+    {label:'Spiele 1–24',  fi:0,       ti:23},
+    {label:'Spiele 25–48', fi:24,      ti:47},
+    {label:`Spiele 49–${Math.min(lastG,72)}`, fi:48, ti:Math.min(71,n-1)},
+    {label:'Finalspiele',  fi:koFirst, ti:n-1},
+    {label:'Total',        fi:0,       ti:n-1}
+  ];
+
   el.innerHTML=
-    `<p style="font-size:10.5px;color:#3a3a3c;margin:4px 0 6px">1 Punkt für richtigen Resultattyp (Sieg / Unentschieden)</p>`+
-    `<div style="overflow-x:auto;margin-top:4px"><table class="ptable" style="width:auto;table-layout:auto;border-collapse:collapse">
-      <thead><tr><th style="width:18px;color:#444;padding:2px 2px 2px 4px">#</th>
-        <th style="color:#444;padding:2px 6px;text-align:left">Name</th>${hdrCells}</tr></thead>
-      <tbody>${trows}</tbody></table></div>`;
+    `<p style="font-size:10.5px;color:#3a3a3c;margin:4px 0 8px">1 Punkt für richtigen Resultattyp (Sieg / Unentschieden)</p>`+
+    `<div style="display:flex;gap:10px;flex-wrap:wrap">`+
+    phases.map(ph=>tbl(ph.label,scoreRange(ph.fi,ph.ti))).join('')+
+    `</div>`;
 }
 
 // ── Sub-Tab: Favoriten ───────────────────────────────────────
@@ -1494,6 +1491,8 @@ function calcFavoriten(){
 function calc10Punkte(){
   const el=document.getElementById('zehnpunkte-body');
   if(!data){el.innerHTML='';return;}
+  try { _calc10PunkteInner(el); } catch(e){ el.innerHTML=`<pre style="color:red;font-size:11px">${e}</pre>`; } }
+function _calc10PunkteInner(el){
   const n=data.gameNums.length;
   const gpEnd=data.gameNums.findIndex(g=>g>72);
   const koFirst=gpEnd===-1?n:gpEnd;
